@@ -2,11 +2,11 @@
 A trading strategy model predicting S&P 500 price movements using ARIMA time-series forecasting.  
 
 ## **Key Performance Metrics**  
-- **Profit Factor**: 1.21 (Profitable)  
-- **Direction Accuracy**: 57.8%  
-- **Annualized Sharpe Ratio**: 1.09  
-- **Win Rate**: 56.2%  
-- **Max Drawdown**: *[Needs recalculation]*  
+- **Profit Factor**: 1.25 (Profitable)  
+- **Direction Accuracy**: 57.3%  
+- **Annualized Sharpe Ratio**: 1.25
+- **Win Rate**: 55.4%  
+- **Max Drawdown**: *(Needs recalculation)*  
 
 ## **How It Works**  
 1. **Data**: 5 years of S&P 500 daily closes  
