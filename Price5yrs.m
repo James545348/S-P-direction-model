@@ -1,133 +1,132 @@
-% Load dataset (update filename if needed)
+% Price prediction backtest using ARIMA model and 5yrs of price data
+
+% Make sure the data has the close column
 data = readtable("HistoricalData_1742929324297.csv", 'VariableNamingRule', 'preserve');
 
-% Verify data
+% Check if its the right data
 if ~ismember('Close/Last', data.Properties.VariableNames)
-    error('Price column not found. Available columns: %s', ...
+    error('Missing price column. Available columns: %s', ...
           strjoin(data.Properties.VariableNames, ', '));
 end
 
+% Prep price data and calculate returns
 prices = data.('Close/Last');
-prices = prices(~isnan(prices) & prices > 0);
+prices = prices(~isnan(prices) & prices > 0);  % Remove bad data
 returns = price2ret(prices);
 
-fprintf('Loaded %d trading days (%.1f years)\n', length(prices), length(prices)/252);
+fprintf('Working with %d trading days (approx. %.1f years)\n', length(prices), length(prices)/252);
 
-%% Step 2: Stationarity Handling
+% Check if returns are stationary 
 [~, pval] = adftest(returns);
 if pval > 0.05
-    returns = diff(returns);
+    returns = diff(returns);   % Difference if non stationary
     returns = returns(~isnan(returns));
-    fprintf('Applied differencing (p=%.3f)\n', pval);
+    fprintf('Applied differencing to make stationary (ADF p=%.3f)\n', pval);
 end
 
-%% Step 3: Train-Test Split
-train_ratio = 0.7;
-train_size = floor(train_ratio * length(returns));
-test_size = length(returns) - train_size;
+% Training and testing periods
+trainPct = 0.7;  % 70% training
+trainLen = floor(trainPct * length(returns));
+testLen = length(returns) - trainLen;
 
-train_data = returns(1:train_size);
-test_data = returns(train_size+1:end);
+trainReturns = returns(1:trainLen);
+testReturns = returns(trainLen+1:end);
 
-fprintf('\nTrain-Test Split:\n');
-fprintf('-> Training: %d days\n', train_size);
-fprintf('-> Testing: %d days\n', test_size);
+fprintf('\nData split:\n');
+fprintf('Training: %d days\n', trainLen);
+fprintf('Testing: %d days\n', testLen);
 
-%% Step 4: Reliable Model Setup
-model = arima(2,0,1);  % Basic but stable model
-fit = estimate(model, train_data, 'Display', 'off');
+% Set up ARIMA model using (2,0,1)?
+model = arima(2,0,1);  
+fittedModel = estimate(model, trainReturns, 'Display', 'off');
 
-%% Step 5: Guaranteed Prediction Backtest
-predicted_directions = zeros(test_size, 1);
-actual_directions = sign(test_data);
+% Run backtest
+predictedDir = zeros(testLen, 1);  % Stores predictions
+actualDir = sign(testReturns);      % Actual market
 
-for t = 1:test_size
-    current_train = [train_data; test_data(1:t-1)];
+for day = 1:testLen
+    % Update training data
+    currentTrain = [trainReturns; testReturns(1:day-1)];
     
-    % Always make a prediction (no volatility filter)
-    [Y, ~] = forecast(fit, 1, 'Y0', current_train);
-    predicted_directions(t) = sign(Y(end));
+    % Make prediction
+    [pred, ~] = forecast(fittedModel, 1, 'Y0', currentTrain);
+    predictedDir(day) = sign(pred(end));
     
-    % Monthly re-estimation
-    if mod(t,21) == 0
-        [fit, ~] = estimate(model, current_train, 'Display', 'off');
+    % Re-estimate model monthly (21 days)
+    if mod(day,21) == 0
+        [fittedModel, ~] = estimate(model, currentTrain, 'Display', 'off');
     end
 end
 
-%% Step 6: Robust Performance Calculation
-% Basic metrics
-accuracy = mean(predicted_directions == actual_directions);
-conf_mat = confusionmat(actual_directions, predicted_directions);
+% Calculate performance metrics
+cost = 0.0005;  % 5bps cost
+stratReturns = testReturns .* predictedDir - cost * abs(predictedDir);
 
-% Strategy returns with 5bps transaction cost
-transaction_cost = 0.0005;
-strategy_returns = test_data .* predicted_directions - transaction_cost * abs(predicted_directions);
+% Basic accuracy
+accuracy = mean(predictedDir == actualDir);
+confMatrix = confusionmat(actualDir, predictedDir);
 
-% Safe metrics calculation
-valid_returns = strategy_returns(~isnan(strategy_returns) & ~isinf(strategy_returns));
-if ~isempty(valid_returns)
-    cum_returns = cumsum(valid_returns);
-    sharpe_ratio = mean(valid_returns)/std(valid_returns)*sqrt(252);
-    sortino_ratio = mean(valid_returns)/std(valid_returns(valid_returns<0))*sqrt(252);
-    win_rate = 100*sum(valid_returns>0)/length(valid_returns);
-    profit_factor = sum(valid_returns(valid_returns>0))/abs(sum(valid_returns(valid_returns<0)));
-    max_dd = my_maxdrawdown(cum_returns);  % Using our custom function
+% Handle potential issues
+validReturns = stratReturns(~isnan(stratReturns) & ~isinf(stratReturns));
+if ~isempty(validReturns)
+    cumReturns = cumsum(validReturns);
+    sharpe = mean(validReturns)/std(validReturns)*sqrt(252);
+    
+    % Risk metrics
+    downside = validReturns(validReturns<0);
+    sortino = mean(validReturns)/std(downside)*sqrt(252);
+    
+    winRate = 100*sum(validReturns>0)/length(validReturns);
+    profitFactor = sum(validReturns(validReturns>0))/abs(sum(validReturns(validReturns<0)));
+    maxDD = maxDrawdown(cumReturns);
 else
-    cum_returns = zeros(test_size,1);
-    sharpe_ratio = 0;
-    sortino_ratio = 0;
-    win_rate = 0;
-    profit_factor = 0;
-    max_dd = 0;
+    % If something went wrong
+    cumReturns = zeros(testLen,1);
+    sharpe = 0;
+    sortino = 0;
+    winRate = 0;
+    profitFactor = 0;
+    maxDD = 0;
 end
 
-%% Step 7: Visualization
+% Plot results
 figure('Position', [100 100 900 600]);
 
-% Cumulative returns
+% Plot cumulative returns 
 subplot(2,1,1);
-plot(cum_returns, 'LineWidth', 2);
+plot(cumReturns, 'LineWidth', 2);
 hold on;
-plot(cumsum(test_data), 'k--');
-title('Strategy Performance');
-legend('Strategy (5bps costs)', 'Buy-and-Hold', 'Location', 'northwest');
+plot(cumsum(testReturns), 'k--');
+title('Strategy vs Buy-and-Hold');
+legend('Our Strategy (with costs)', 'Buy-and-Hold', 'Location', 'northwest');
 grid on;
 
-% Prediction accuracy
+% Accuracy over time
 subplot(2,1,2);
-plot(movmean(predicted_directions==actual_directions, 21), 'LineWidth', 2);
-yline(0.5, 'r--');
-title('21-Day Moving Accuracy');
+plot(movmean(predictedDir==actualDir, 21), 'LineWidth', 2);
+yline(0.5, 'r--');  % 50% accuracy line
+title('Rolling 21-Day Accuracy');
 ylim([0 1]);
 grid on;
 
-%% Step 8: Performance Report
-fprintf('\n=== Strategy Performance ===\n');
+% Performance summary
+fprintf('\n=== Performance Summary ===\n');
 fprintf('Direction Accuracy: %.1f%%\n', accuracy*100);
-fprintf('Annualized Sharpe: %.2f\n', sharpe_ratio);
-fprintf('Sortino Ratio: %.2f\n', sortino_ratio);
-fprintf('Win Rate: %.1f%%\n', win_rate);
-fprintf('Profit Factor: %.2f\n', profit_factor);
-fprintf('Max Drawdown: %.2f%%\n', 100*max_dd);
+fprintf('Annual Sharpe: %.2f\n', sharpe);
+fprintf('Sortino Ratio: %.2f\n', sortino);
+fprintf('Win Rate: %.1f%%\n', winRate);
+fprintf('Profit Factor: %.2f\n', profitFactor);
+fprintf('Max Drawdown: %.2f%%\n', 100*maxDD);
 fprintf('\nConfusion Matrix:\n');
-disp(conf_mat);
+disp(confMatrix);
 
-%% Custom Max Drawdown Function
-function max_dd = my_maxdrawdown(cum_returns)
-    % Calculate running maximum
-    running_max = cummax(cum_returns);
-    
-    % Calculate drawdowns
-    drawdowns = (running_max - cum_returns) ./ running_max;
-    
-    % Handle case where running_max is zero
-    drawdowns(running_max == 0) = 0;
-    
-    % Maximum drawdown
-    max_dd = max(drawdowns);
-    
-    % If no drawdown occurred
-    if isempty(max_dd) || isnan(max_dd)
-        max_dd = 0;
+% Calculate max drawdown
+function dd = maxDrawdown(cumReturns)
+    runningMax = cummax(cumReturns);
+    drawdowns = (runningMax - cumReturns) ./ runningMax;
+    drawdowns(runningMax == 0) = 0;  % Handle division by zero
+    dd = max(drawdowns);
+    if isempty(dd) || isnan(dd)
+        dd = 0;
     end
 end
